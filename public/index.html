@@ -77,6 +77,8 @@
   const startBtn = $('start'), stopBtn = $('stop'), muteBtn = $('mute'), statusEl = $('status');
 
   let room = null;
+  let agentSeen = false;
+  let waitTimer = null;
   const setStatus = (t) => (statusEl.textContent = t);
 
   function addLine(who, text) {
@@ -99,6 +101,7 @@
         if (participant.identity !== AVATAR_IDENTITY) return;
         const el = track.attach();
         if (track.kind === Track.Kind.Video) {
+          clearTimeout(waitTimer);
           placeholder.hidden = true;
           stage.append(el);
           setStatus('Live');
@@ -113,6 +116,21 @@
       });
       room.on(RoomEvent.Disconnected, reset);
 
+      // Diagnostics: show whether the agent joined and what it reports.
+      room.on(RoomEvent.ParticipantConnected, (p) => {
+        if (p.identity !== AVATAR_IDENTITY && p.kind === LivekitClient.ParticipantKind.AGENT) {
+          agentSeen = true;
+          setStatus('Agent joined, starting avatar…');
+        }
+      });
+      room.on(RoomEvent.ParticipantAttributesChanged, (attrs, p) => {
+        if (attrs['avatar.stage'] === 'error' || p.attributes['avatar.stage'] === 'error') {
+          clearTimeout(waitTimer);
+          setStatus('Error: ' + (p.attributes['avatar.error'] || 'avatar failed to start'));
+          addLine('Agent error', p.attributes['avatar.error'] || 'avatar failed to start');
+        }
+      });
+
       // Live transcriptions of both the user and the agent.
       room.registerTextStreamHandler('lk.transcription', async (reader, info) => {
         if (reader.info.attributes?.['lk.transcription_final'] !== 'true') return;
@@ -124,7 +142,18 @@
       await room.connect(url, token);
       await room.startAudio();
       await room.localParticipant.setMicrophoneEnabled(true);
-      setStatus('Waiting for avatar…');
+      setStatus('Waiting for agent…');
+      agentSeen = [...room.remoteParticipants.values()].some(
+        (p) => p.kind === LivekitClient.ParticipantKind.AGENT,
+      );
+      waitTimer = setTimeout(() => {
+        if (placeholder.hidden) return;
+        const hint = agentSeen
+          ? 'Agent joined but the avatar never appeared. Check the agent terminal for errors.'
+          : 'No agent joined the room. Is `npm run agent` running with the same LIVEKIT_* values as the web server?';
+        setStatus('Stuck: see log below');
+        addLine('Hint', hint);
+      }, 45000);
       stopBtn.disabled = false; muteBtn.disabled = false;
     } catch (err) {
       console.error(err);
@@ -135,6 +164,7 @@
   }
 
   function reset() {
+    clearTimeout(waitTimer);
     stage.querySelectorAll('video').forEach((v) => v.remove());
     document.querySelectorAll('body > audio').forEach((a) => a.remove());
     placeholder.hidden = false;

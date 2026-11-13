@@ -42,6 +42,13 @@ Open http://localhost:3000, press **Start** and allow microphone access. The ava
 
 ## Customize
 
-- **Avatar**: set `SYNTHESIA_AVATAR_ID` to any gallery avatar ID in your workspace (up to 5, comma-separated).
+- **Avatar**: set `SYNTHESIA_AVATAR_ID` to an avatar ID your workspace can use with interactive avatars (up to 5, comma-separated).
+  The built-in default is only an example. If the agent logs `unknown_reference` / "avatarIds does not exist or is not accessible",
+  your workspace can't use that ID. Pick one from your Synthesia account instead.
+
+## Troubleshooting
+
+The page shows what's happening: "Waiting for agent…", then "Agent joined, starting avatar…", then the video.
+If the avatar fails to start, the Synthesia error appears under the video and in the `npm run agent` terminal.
 - **Personality**: edit `instructions` in `src/agent.ts`.
 - **Models / voice**: change the `stt`, `llm` and `tts` strings in `src/agent.ts`.
