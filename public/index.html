@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Interactive Avatar</title>
+  <style>
+    :root {
+      --bg: #f6f6f4; --panel: #ffffff; --text: #18181b; --muted: #6b6b73;
+      --border: #e4e4e7; --accent: #4f46e5; --accent-text: #fff; --danger: #dc2626;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0f0f12; --panel: #18181d; --text: #f4f4f5; --muted: #a1a1aa;
+        --border: #2a2a31; --accent: #818cf8; --accent-text: #0f0f12; --danger: #f87171;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
+      font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+      display: flex; justify-content: center; padding: 32px 16px;
+    }
+    main { width: 100%; max-width: 720px; display: grid; gap: 16px; }
+    h1 { font-size: 20px; margin: 0; }
+    .stage {
+      position: relative; aspect-ratio: 16 / 9; background: #000; border-radius: 12px;
+      overflow: hidden; border: 1px solid var(--border);
+    }
+    .stage video { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .placeholder {
+      position: absolute; inset: 0; display: grid; place-items: center;
+      color: #a1a1aa; text-align: center; padding: 16px;
+    }
+    .controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    button {
+      font: inherit; padding: 10px 16px; border-radius: 8px; cursor: pointer;
+      border: 1px solid var(--border); background: var(--panel); color: var(--text);
+    }
+    button.primary { background: var(--accent); color: var(--accent-text); border-color: transparent; }
+    button.danger { color: var(--danger); }
+    button:disabled { opacity: .5; cursor: default; }
+    #status { color: var(--muted); margin-left: auto; font-size: 14px; }
+    #log {
+      background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+      padding: 12px 16px; min-height: 120px; max-height: 260px; overflow-y: auto; font-size: 14px;
+    }
+    #log p { margin: 4px 0; }
+    #log .who { font-weight: 600; margin-right: 6px; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Synthesia interactive avatar</h1>
+
+  <div class="stage" id="stage">
+    <div class="placeholder" id="placeholder">Press Start to talk to the avatar.</div>
+  </div>
+
+  <div class="controls">
+    <button class="primary" id="start">Start</button>
+    <button id="mute" disabled>Mute mic</button>
+    <button class="danger" id="stop" disabled>End</button>
+    <span id="status">Idle</span>
+  </div>
+
+  <div id="log" aria-live="polite"></div>
+</main>
+
+<script src="/vendor/livekit-client.umd.js"></script>
+<script>
+  const { Room, RoomEvent, Track } = LivekitClient;
+  const AVATAR_IDENTITY = 'synthesia-avatar-agent';
+
+  const $ = (id) => document.getElementById(id);
+  const stage = $('stage'), placeholder = $('placeholder'), log = $('log');
+  const startBtn = $('start'), stopBtn = $('stop'), muteBtn = $('mute'), statusEl = $('status');
+
+  let room = null;
+  const setStatus = (t) => (statusEl.textContent = t);
+
+  function addLine(who, text) {
+    const p = document.createElement('p');
+    const w = document.createElement('span');
+    w.className = 'who'; w.textContent = who + ':';
+    p.append(w, document.createTextNode(text));
+    log.append(p); log.scrollTop = log.scrollHeight;
+  }
+
+  async function start() {
+    startBtn.disabled = true;
+    setStatus('Connecting…');
+    try {
+      const { url, token } = await fetch('/api/token').then((r) => r.json());
+      room = new Room({ adaptiveStream: true, dynacast: true });
+
+      room.on(RoomEvent.TrackSubscribed, (track, _pub, participant) => {
+        // Only render the avatar's media; the agent's own audio is rerouted to the avatar.
+        if (participant.identity !== AVATAR_IDENTITY) return;
+        const el = track.attach();
+        if (track.kind === Track.Kind.Video) {
+          placeholder.hidden = true;
+          stage.append(el);
+          setStatus('Live');
+        } else {
+          el.hidden = true;
+          document.body.append(el);
+        }
+      });
+      room.on(RoomEvent.TrackUnsubscribed, (track) => track.detach().forEach((el) => el.remove()));
+      room.on(RoomEvent.ParticipantConnected, (p) => {
+        if (p.identity === AVATAR_IDENTITY) setStatus('Avatar joined, loading video…');
+      });
+      room.on(RoomEvent.Disconnected, reset);
+
+      // Live transcriptions of both the user and the agent.
+      room.registerTextStreamHandler('lk.transcription', async (reader, info) => {
+        if (reader.info.attributes?.['lk.transcription_final'] !== 'true') return;
+        const text = await reader.readAll();
+        if (!text.trim()) return;
+        addLine(info.identity === room.localParticipant.identity ? 'You' : 'Avatar', text);
+      });
+
+      await room.connect(url, token);
+      await room.startAudio();
+      await room.localParticipant.setMicrophoneEnabled(true);
+      setStatus('Waiting for avatar…');
+      stopBtn.disabled = false; muteBtn.disabled = false;
+    } catch (err) {
+      console.error(err);
+      setStatus('Error: ' + (err.message || err));
+      await room?.disconnect();
+      reset();
+    }
+  }
+
+  function reset() {
+    stage.querySelectorAll('video').forEach((v) => v.remove());
+    document.querySelectorAll('body > audio').forEach((a) => a.remove());
+    placeholder.hidden = false;
+    room = null;
+    startBtn.disabled = false; stopBtn.disabled = true;
+    muteBtn.disabled = true; muteBtn.textContent = 'Mute mic';
+    if (!statusEl.textContent.startsWith('Error')) setStatus('Idle');
+  }
+
+  startBtn.onclick = start;
+  stopBtn.onclick = () => room?.disconnect();
+  muteBtn.onclick = async () => {
+    const on = room.localParticipant.isMicrophoneEnabled;
+    await room.localParticipant.setMicrophoneEnabled(!on);
+    muteBtn.textContent = on ? 'Unmute mic' : 'Mute mic';
+  };
+</script>
+</body>
+</html>
