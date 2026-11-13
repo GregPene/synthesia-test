@@ -70,7 +70,7 @@ export default defineAgent({
       tts: 'cartesia/sonic-3:9626c31c-bec5-4cca-baa8-f8ba9e84c8bc',
     });
 
-    const avatarIds = (process.env.SYNTHESIA_AVATAR_ID ?? DEFAULT_AVATAR_ID)
+    const avatarIds = (process.env.SYNTHESIA_AVATAR_ID || DEFAULT_AVATAR_ID)
       .split(',')
       .map((id) => id.trim())
       .filter(Boolean);
